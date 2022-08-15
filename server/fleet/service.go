@@ -41,6 +41,7 @@ type OsqueryService interface {
 
 type Service interface {
 	OsqueryService
+	EnrollOrbit(ctx context.Context, hardwareUUID string, enrollSecret string) (orbitNodeKey string, err error)
 
 	///////////////////////////////////////////////////////////////////////////////
 	// UserService contains methods for managing a Fleet User.
