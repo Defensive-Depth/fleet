@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/fleetdm/fleet/v4/pkg/fleethttp"
 	"io"
 	"io/fs"
 	"io/ioutil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -350,6 +352,22 @@ func main() {
 			return fmt.Errorf("cleanup old files: %w", err)
 		}
 
+		log.Info().Msg("running single query for UUID")
+		//var singleRun run.Group
+		//var singleRunOpts []osquery.Option
+		//singleRunOpts = append(singleRunOpts, osquery.SingleQuery())
+		//singleRunOpts = append(singleRunOpts, osquery.WithFlags([]string{"-S"}))
+		//singleRunOpts = append(singleRunOpts, osquery.WithFlags([]string{"--line \"select uuid from system_info;\""}))
+		//rr, e := osquery.NewRunner(osquerydPath, singleRunOpts...)
+		//if e != nil {
+		//	return fmt.Errorf("create osquery runner: %w", err)
+		//}
+		//singleRun.Add(rr.Execute, rr.Interrupt)
+
+		uuidStr, _ := getUUID(osquerydPath)
+		log.Info().Msg("UUID is")
+		log.Info().Msg(uuidStr)
+
 		var options []osquery.Option
 		options = append(options, osquery.WithDataPath(c.String("root-dir")))
 		options = append(options, osquery.WithLogPath(filepath.Join(c.String("root-dir"), "osquery_log")))
@@ -643,6 +661,23 @@ func (d *desktopRunner) interrupt(err error) {
 	if err := killProcessByName(constant.DesktopAppExecName); err != nil {
 		log.Error().Err(err).Msg("killProcess")
 	}
+}
+
+func enroll() {
+	client := fleethttp.NewClient()
+}
+
+func getUUID(osqueryPath string) (string, error) {
+	args := []string{"-S", "--line", "select uuid from system_info"}
+	out, err := exec.Command(osqueryPath, args...).Output()
+	if err != nil {
+		return "", err
+	}
+	temp := strings.Split(string(out), "=")
+	if len(temp) != 2 {
+		return "", errors.New("error getting uuid")
+	}
+	return strings.TrimSpace(temp[len(temp)-1]), nil
 }
 
 func loadOrGenerateToken(rootDir string) (string, error) {
