@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/fleetdm/fleet/v4/pkg/fleethttp"
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -353,16 +357,6 @@ func main() {
 		}
 
 		log.Info().Msg("running single query for UUID")
-		//var singleRun run.Group
-		//var singleRunOpts []osquery.Option
-		//singleRunOpts = append(singleRunOpts, osquery.SingleQuery())
-		//singleRunOpts = append(singleRunOpts, osquery.WithFlags([]string{"-S"}))
-		//singleRunOpts = append(singleRunOpts, osquery.WithFlags([]string{"--line \"select uuid from system_info;\""}))
-		//rr, e := osquery.NewRunner(osquerydPath, singleRunOpts...)
-		//if e != nil {
-		//	return fmt.Errorf("create osquery runner: %w", err)
-		//}
-		//singleRun.Add(rr.Execute, rr.Interrupt)
 
 		uuidStr, _ := getUUID(osquerydPath)
 		log.Info().Msg("UUID is")
@@ -441,6 +435,7 @@ func main() {
 				osquery.WithFlags(osquery.FleetFlags(parsedURL)),
 				osquery.WithFlags([]string{"--tls_server_certs", certPath}),
 			)
+
 		} else if fleetURL != "https://" {
 			if enrollSecret == "" {
 				return errors.New("enroll secret must be specified to connect to Fleet server")
@@ -480,7 +475,16 @@ func main() {
 					log.Info().Msg("No cert chain available. Relying on system store.")
 				}
 			}
+
 		}
+
+		_, nkr, e := enroll(fleetURL, enrollSecret, uuidStr, c.Bool("insecure"))
+		if e != nil {
+			log.Info().Msg("ERROR enrolling " + e.Error())
+		}
+
+		store, _ := filestore.New(filepath.Join(c.String("root-dir"), "orbit-node-key.json"))
+		store.SetMeta("orbit_node_key", nkr)
 
 		// --force is sometimes needed when an older osquery process has not
 		// exited properly
@@ -663,8 +667,54 @@ func (d *desktopRunner) interrupt(err error) {
 	}
 }
 
-func enroll() {
-	client := fleethttp.NewClient()
+func enroll(url string, enrollSecret string, hardwareUUID string, insecure bool) (string, json.RawMessage, error) {
+	type enrollReq struct {
+		EnrollSecret string `json:"enroll_secret"`
+		HardwareUUID string `json:"hardware_uuid"`
+	}
+
+	type enrollResp struct {
+		OrbitNodeKey string `json:"orbit_node_key,omitempty"`
+		Err          error  `json:"error,omitempty"`
+	}
+
+	type enrollRespRaw struct {
+	}
+
+	enrollUrl := url + "/api/latest/fleet/orbit/enroll"
+
+	jsonBlob, err := json.Marshal(enrollReq{EnrollSecret: enrollSecret, HardwareUUID: hardwareUUID})
+	if err != nil {
+		return "", nil, err
+	}
+
+	client := fleethttp.NewClient(fleethttp.WithTLSClientConfig(&tls.Config{InsecureSkipVerify: insecure}))
+	req, err := http.NewRequest(http.MethodPost, enrollUrl, bytes.NewBuffer(jsonBlob))
+	if err != nil {
+		return "", nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	var result enrollResp
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", nil, err
+	}
+	return result.OrbitNodeKey, body, nil
 }
 
 func getUUID(osqueryPath string) (string, error) {
